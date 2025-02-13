@@ -66,7 +66,7 @@ class ChessGUI:
                 log_error(f"rsvg-convert error: {result.stderr}")
                 raise Exception("Failed to convert SVG")
 
-            image = Image.open("board.png")
+            image = Image.open("board.svg")
             image = image.resize((600, 600), Image.Resampling.LANCZOS)
             image = ImageTk.PhotoImage(image)
             self.canvas.config(image=image)

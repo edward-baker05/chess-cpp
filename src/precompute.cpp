@@ -4,7 +4,6 @@
 
 namespace chess {
 
-// Define static members
 std::array<std::array<int, 8>, 64> PrecomputedMoveData::numSquaresToEdge;
 std::array<std::vector<uint8_t>, 64> PrecomputedMoveData::knightMoves;
 std::array<std::vector<uint8_t>, 64> PrecomputedMoveData::kingMoves;
@@ -34,7 +33,6 @@ void PrecomputedMoveData::initialize() {
                                         std::min(south, east), 
                                         std::min(north, east), 
                                         std::min(south, west) };
-        // Compute pawn attacks
         if (x > 0) {
             if (y < 7) pawnAttacksWhite[squareIndex].push_back(squareIndex + 7);
             if (y > 0) pawnAttacksBlack[squareIndex].push_back(squareIndex - 9);
@@ -44,7 +42,6 @@ void PrecomputedMoveData::initialize() {
             if (y > 0) pawnAttacksBlack[squareIndex].push_back(squareIndex - 7);
         }
 
-        // Compute bitboards for knights
         uint64_t knightBitboard = 0;
         static const int allKnightJumps[] = { 15, 17, -17, -15, 10, -6, 6, -10 };
         for (int jump : allKnightJumps) {
@@ -61,7 +58,6 @@ void PrecomputedMoveData::initialize() {
         knightAttackBitboards[squareIndex] = knightBitboard;
     }
 
-    // Compute orthogonal and king distances
     for (int squareA = 0; squareA < 64; squareA++) {
         int rankA = squareA / 8;
         int fileA = squareA % 8;

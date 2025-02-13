@@ -7,20 +7,17 @@ namespace chess {
 
 class Evaluation {
 public:
-    // Piece values
-    int pawnValue = 100;
-    int knightValue = 300;
-    int bishopValue = 320;
-    int rookValue = 500;
-    int queenValue = 900;
+    static int const pawnValue = 100;
+    static int const knightValue = 300;
+    static int const bishopValue = 320;
+    static int const rookValue = 500;
+    static int const queenValue = 900;
     
-    // Game state constants
     float endgameMaterial = rookValue * 2 + bishopValue + knightValue;
     int maxDepth = 4;
     int WHITE = 0;
     int BLACK = 1;
     
-    // Board state
     Board board;
 
     /**

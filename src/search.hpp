@@ -38,7 +38,6 @@ public:
     Search(Board& board, AISettings settings);
     ~Search() = default;
 
-    // Disable copying
     Search(const Search&) = delete;
     Search& operator=(const Search&) = delete;
 
@@ -46,10 +45,8 @@ public:
     void endSearch();
     std::pair<Move, int> getSearchResult() const;
     
-    // Callback for when search completes
     std::function<void(Move)> onSearchComplete;
     
-    // Public access to diagnostics
     const SearchDiagnostics& getDiagnostics() const { return searchDiagnostics; }
 
     static bool isMateScore(int score);
@@ -60,16 +57,18 @@ private:
     static constexpr int immediateMateScore = 100000;
     static constexpr int positiveInfinity = 9999999;
     static constexpr int negativeInfinity = -positiveInfinity;
+    std::string currentRootFEN;
 
-    int searchMoves(int depth, int plyFromRoot, int alpha, int beta);
-    int quiescenceSearch(int alpha, int beta);
+    int searchMoves(int depth, int plyFromRoot, int alpha, int beta, Board& newBoard);
+    void parallelSearch(int depth);
+    int quiescenceSearch(int alpha, int beta, Board& currentBoard);
     void initDebugInfo();
     void logDebugInfo();
     void announceMate();
     int evaluatePosition();
-    void orderMoves(Movelist moves);
+    void orderMoves(Movelist& moves, Board& currentBoard);
+    int capturedPieceValue(Board& board, Move move);
 
-    // Member variables
     Board board;
     TranspositionTable transpositionTable;
     Move bestMoveThisIteration;
@@ -80,7 +79,6 @@ private:
     bool abortSearch;
     Evaluation evaluation;
 
-    // Diagnostics
     SearchDiagnostics searchDiagnostics;
     int numNodes;
     int numQNodes;
@@ -89,4 +87,4 @@ private:
     std::chrono::steady_clock::time_point searchStartTime;
 };
 
-} // namespace Chess
+}

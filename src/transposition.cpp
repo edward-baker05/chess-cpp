@@ -1,75 +1,70 @@
 #include "transposition.hpp"
 #include "search.hpp"
 
-using namespace std;
-
-TranspositionTable::TranspositionTable(Board& board, uint64_t size)
-    : board_(board), size_(size), entries() {
+TranspositionTable::TranspositionTable(uint64_t size) : size_(size) {
     entries.rehash(size);
 }
 
 void TranspositionTable::clear() {
+    std::lock_guard<std::mutex> lock(tableMutex);
     entries.clear();
 }
 
-uint64_t TranspositionTable::index(Board board) const {
-    return board.hash() % size_;
+uint64_t TranspositionTable::index(uint64_t hash) const {
+    return hash % size_;
 }
 
-Move TranspositionTable::getStoredMove(Board board) {
-    return entries[index(board)].move;
+Move TranspositionTable::getStoredMove(uint64_t hash) {
+    std::lock_guard<std::mutex> lock(tableMutex);
+    auto it = entries.find(hash);
+    return (it != entries.end()) ? it->second.move : Move::NO_MOVE;
 }
 
-bool tryLookupEvaluation(int depth, int plyFromRoot, int alpha, int beta, int eval) {
-    eval = 0;
-    return false;
-}
+int TranspositionTable::lookupEvaluation(int depth, int plyFromRoot, int alpha, int beta, uint64_t hash) {
+    if (!enabled) return lookupFailed;
 
-int TranspositionTable::lookupEvaluation(int depth, int plyFromRoot, int alpha, int beta, Board board) {
-    if (!enabled) {
-        return lookupFailed;
-    }
-
-    Entry entry = entries[index(board)];
-
-    if (entry.key == board.hash()) {
+    std::lock_guard<std::mutex> lock(tableMutex);
+    auto it = entries.find(hash);
+    
+    if (it != entries.end() && it->second.key == hash) {
+        const Entry& entry = it->second;
         if (entry.depth >= depth) {
             int correctedScore = correctRetrievedMateScore(entry.value, plyFromRoot);
-            if (entry.nodeType == exact) {
-                return correctedScore;
-            }
-            if (entry.nodeType == upperBound && correctedScore <= alpha) {
-                return correctedScore;
-            }
-            if (entry.nodeType == lowerBound && correctedScore >= beta) {
-                return correctedScore;
-            }
+            
+            if (entry.nodeType == exact) return correctedScore;
+            if (entry.nodeType == upperBound && correctedScore <= alpha) return correctedScore;
+            if (entry.nodeType == lowerBound && correctedScore >= beta) return correctedScore;
         }
     }
     return lookupFailed;
 }
 
-void TranspositionTable::storeEvaluation(int depth, int numPlySearched, int eval, int evalType, Move move, Board board) {
-    if (!enabled) {
-        return;
-    }
+void TranspositionTable::storeEvaluation(int depth, int numPlySearched, int eval, 
+                                       int evalType, Move move, uint64_t hash) {
+    if (!enabled) return;
 
-    Entry entry(board.hash(), correctMateScoreForStorage(eval, numPlySearched), (uint8_t)depth, (uint8_t)evalType, move);
-    entries[index(board)] = entry;
+    std::lock_guard<std::mutex> lock(tableMutex);
+    entries[hash] = Entry(
+        hash,
+        correctMateScoreForStorage(eval, numPlySearched),
+        static_cast<uint8_t>(depth),
+        static_cast<uint8_t>(evalType),
+        move
+    );
 }
 
 int TranspositionTable::correctMateScoreForStorage(int score, int numPlySearched) {
     if (Search::isMateScore(score)) {
-        int sign = score > 0 ? 1 : score < 0 ? -1 : 0;
-        return (score * sign + numPlySearched) * sign;
+        int sign = (score > 0) ? 1 : -1;
+        return sign * (std::abs(score) + numPlySearched);
     }
     return score;
 }
 
 int TranspositionTable::correctRetrievedMateScore(int score, int numPlySearched) {
     if (Search::isMateScore(score)) {
-        int sign = score > 0 ? 1 : score < 0 ? -1 : 0;
-        return (score * sign - numPlySearched) * sign;
+        int sign = (score > 0) ? 1 : -1;
+        return sign * (std::abs(score) - numPlySearched);
     }
     return score;
 }

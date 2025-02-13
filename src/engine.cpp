@@ -5,12 +5,11 @@ using namespace std;
 Engine::Engine(int maxDepth, Board board) 
     : maxDepth_(maxDepth), 
       board_(board), 
-      transposition_(board, 256000), 
-      search_(board, AISettings{maxDepth}) // Initialize the Search object
+      transposition_(256000), 
+      search_(board, AISettings{maxDepth}) 
 {
-    // Configure AISettings for the Search class
-    search_.settings.useIterativeDeepening = true; // Example setting
-    search_.settings.depth = maxDepth; // Set the search depth
+    search_.settings.useIterativeDeepening = true;
+    search_.settings.depth = maxDepth; 
 }
 
 chess::Move Engine::getMove(Board& board) {
@@ -18,14 +17,12 @@ chess::Move Engine::getMove(Board& board) {
     team_ = board_.sideToMove();
     cout << "Maximising score for " << team_ << endl;
 
-    // Use the Search class to find the best move
     cout << "Starting search..." << endl;
-    search_.startSearch(board); // Start the search
-    auto [bestMove, bestEval] = search_.getSearchResult(); // Retrieve the best move and evaluation
+    search_.startSearch(board); 
+    auto [bestMove, bestEval] = search_.getSearchResult(); 
 
-    // Log the best move and evaluation
     cout << "Best move: " << chess::uci::moveToSan(board_, bestMove) 
               << " Eval: " << bestEval << endl;
 
-    return bestMove; // Return the best move
+    return bestMove; 
 }

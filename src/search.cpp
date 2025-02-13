@@ -6,6 +6,11 @@
 #include <fstream>
 #include <chrono>
 #include <cstdio>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 using namespace std;
 namespace chess {
@@ -13,7 +18,7 @@ namespace chess {
 Search::Search(Board& board, AISettings settings) 
     : board(board)
     , settings(settings)
-    , transpositionTable(board, 1 << 20)
+    , transpositionTable(1 << 20)
     , numNodes(0)
     , numQNodes(0)
     , numCutoffs(0)
@@ -29,6 +34,8 @@ Search::Search(Board& board, AISettings settings)
 void Search::startSearch(Board board) {
     initDebugInfo();
     this->board = board;
+    currentRootFEN = board.getFen();
+    transpositionTable.clear();
 
     bestEvalThisIteration = bestEval = 0;
     bestMoveThisIteration = bestMove = Move::NO_MOVE;
@@ -37,55 +44,33 @@ void Search::startSearch(Board board) {
     searchDiagnostics = SearchDiagnostics();
 
     if (settings.useIterativeDeepening) {
-	auto start = chrono::steady_clock::now();
-	cout << "Using iterative deepening" << endl;
+        cout << "Using iterative deepening" << endl;
         int targetDepth = settings.useFixedDepthSearch ? settings.depth : numeric_limits<int>::max();
+        auto start = chrono::steady_clock::now();
 
         for (int searchDepth = 1; searchDepth <= targetDepth; searchDepth++) {
-	    auto end = chrono::steady_clock::now();
+            auto end = chrono::steady_clock::now();
             int elapsed = chrono::duration<double, milli>(end - start).count();
             cout << "Depth " << searchDepth - 1 << " complete in " << elapsed << endl;
 
-            if (searchDepth > 4) {
-                break;
-            }
+            if (searchDepth >= 4 && elapsed > 2000) break;
 
             cout << "Searching depth " << searchDepth << endl;
-            searchMoves(searchDepth, 0, negativeInfinity, positiveInfinity);
+            parallelSearch(searchDepth);
 
-            if (abortSearch) {
-                break;
-            } else {
-                currentIterativeSearchDepth = searchDepth;
-                bestMove = bestMoveThisIteration;
-                bestEval = bestEvalThisIteration;
-
-                searchDiagnostics.lastCompletedDepth = searchDepth;
-                searchDiagnostics.move = uci::moveToUci(bestMove);
-                searchDiagnostics.eval = bestEval;
-                searchDiagnostics.moveVal = uci::moveToUci(bestMove); 
-
-                if (isMateScore(bestEval) && !settings.endlessSearchMode) {
-                    break;
-                }
-            }
+            if (abortSearch) break;
+            currentIterativeSearchDepth = searchDepth;
+            bestMove = bestMoveThisIteration;
+            bestEval = bestEvalThisIteration;
         }
     } else {
-        searchMoves(settings.depth, 0, negativeInfinity, positiveInfinity);
+        parallelSearch(settings.depth);
         bestMove = bestMoveThisIteration;
         bestEval = bestEvalThisIteration;
     }
-
-    if (onSearchComplete) {
-        onSearchComplete(bestMove);
-    }
-
-    if (!settings.useThreading) {
-        logDebugInfo();
-    }
 }
 
-pair<Move, int> Search::getSearchResult() const {
+std::pair<Move, int> Search::getSearchResult() const {
     return {bestMove, bestEval};
 }
 
@@ -93,147 +78,177 @@ void Search::endSearch() {
     abortSearch = true;
 }
 
-int Search::searchMoves(int depth, int plyFromRoot, int alpha, int beta) {
-    if (abortSearch) {
-        return 0;
+void Search::parallelSearch(int depth) {
+    Board rootBoard;
+    rootBoard.setFen(currentRootFEN);
+    Movelist moves;
+    movegen::legalmoves(moves, rootBoard);
+    orderMoves(moves, rootBoard);
+
+    if (moves.empty()) return;
+
+    mutex mtx;
+    atomic<int> sharedAlpha = negativeInfinity;
+    atomic<bool> stopFlag = false;
+    vector<thread> workers;
+    string rootFEN = currentRootFEN;
+
+    Board primaryBoard;
+    primaryBoard.setFen(rootFEN);
+    primaryBoard.makeMove(moves[0]);
+    int eval = -searchMoves(depth - 1, 1, -positiveInfinity, -sharedAlpha, primaryBoard);
+    primaryBoard.unmakeMove(moves[0]);
+
+    {
+        lock_guard<mutex> lock(mtx);
+        bestMoveThisIteration = moves[0];
+        bestEvalThisIteration = eval;
+        sharedAlpha = eval;
     }
 
-    if (plyFromRoot > 0) {
-        if (board.isRepetition(1)) {
-            return 0;
-        }
+    for (size_t i = 1; i < moves.size(); i++) {
+        workers.emplace_back([this, i, depth, rootFEN, &moves, &mtx, &sharedAlpha, &stopFlag]() {
+            if (stopFlag.load()) return;
 
-        alpha = max(alpha, -immediateMateScore + plyFromRoot);
-        beta = min(beta, immediateMateScore - plyFromRoot);
-        if (alpha >= beta) {
-            return alpha;
-        }
+            Board threadBoard;
+            threadBoard.setFen(rootFEN);
+
+            const Move move = moves[i];
+            threadBoard.makeMove(move);
+
+            int eval = -searchMoves(depth - 1, 1, -positiveInfinity, -sharedAlpha, threadBoard);
+            threadBoard.unmakeMove(move);
+
+            lock_guard<mutex> lock(mtx);
+            if (eval > sharedAlpha) {
+                sharedAlpha = eval;
+                bestMoveThisIteration = move;
+                bestEvalThisIteration = eval;
+            }
+        });
     }
 
-    int ttEval = transpositionTable.lookupEvaluation(depth, plyFromRoot, alpha, beta, board);
-    if (ttEval != TranspositionTable::lookupFailed) {
-        numTranspositions++;
-        if (plyFromRoot == 0) {
-            bestMoveThisIteration = transpositionTable.getStoredMove(board);
-            bestEvalThisIteration = transpositionTable.entries[transpositionTable.index(board)].value;
-        }
-        return ttEval;
+    for (auto& worker : workers) {
+        if (worker.joinable()) worker.join();
     }
+}
 
-    if (depth == 0) {
-        return quiescenceSearch(alpha, beta);
-    }
+int Search::searchMoves(int depth, int plyFromRoot, int alpha, int beta, Board& currentBoard) {
+    if (abortSearch) return 0;
+    if (depth == 0) return quiescenceSearch(alpha, beta, currentBoard);
+
+    uint64_t hash = currentBoard.hash();
+    int ttValue = transpositionTable.lookupEvaluation(depth, plyFromRoot, alpha, beta, hash);
+    if (ttValue != TranspositionTable::lookupFailed) return ttValue;
 
     Movelist moves;
-    movegen::legalmoves(moves, board);
-    orderMoves(moves);
+    movegen::legalmoves(moves, currentBoard);
+    orderMoves(moves, currentBoard);
 
     if (moves.empty()) {
-        if (board.inCheck()) {
-            int mateScore = immediateMateScore - plyFromRoot;
-            return -mateScore;
-        } else {
-            return 0;
-        }
+        return currentBoard.inCheck() ? -immediateMateScore + plyFromRoot : 0;
     }
 
-    Move bestMoveHere = Move::NO_MOVE;
-    int evalBound = TranspositionTable::upperBound;
+    int nodeType = TranspositionTable::upperBound;
+    Move bestMove = Move::NO_MOVE;
 
     for (const Move move : moves) {
-        board.makeMove(move);
-        int eval = -searchMoves(depth - 1, plyFromRoot + 1, -beta, -alpha);
-        board.unmakeMove(move);
+        Board newBoard; 
+        newBoard.setFen(currentBoard.getFen());
+        newBoard.makeMove(move);
 
+        int eval = -searchMoves(depth - 1, plyFromRoot + 1, -beta, -alpha, newBoard);
         numNodes++;
 
         if (eval >= beta) {
             numCutoffs++;
-            transpositionTable.storeEvaluation(depth, plyFromRoot, beta, TranspositionTable::lowerBound, move, board);
+            transpositionTable.storeEvaluation(depth, plyFromRoot, beta, TranspositionTable::lowerBound, move, hash);
             return beta;
         }
 
         if (eval > alpha) {
-            evalBound = TranspositionTable::exact;
-            bestMoveHere = move;
-
             alpha = eval;
-            if (plyFromRoot == 0) {
-                bestMoveThisIteration = move;
-                bestEvalThisIteration = eval;
-            }
+            nodeType = TranspositionTable::exact;
+            bestMove = move;
         }
     }
 
-    transpositionTable.storeEvaluation(depth, plyFromRoot, alpha, evalBound, bestMoveHere, board);
-
+    transpositionTable.storeEvaluation(depth, plyFromRoot, alpha, nodeType, bestMove, hash);
     return alpha;
 }
 
-int Search::quiescenceSearch(int alpha, int beta) {
-    int eval = evaluation.evaluate(board);
+int Search::quiescenceSearch(int alpha, int beta, Board& currentBoard) {
+    int eval = evaluation.evaluate(currentBoard);
     searchDiagnostics.numPositionsEvaluated++;
 
-    if (eval >= beta) {
-        return beta;
-    }
-    if (eval > alpha) {
-        alpha = eval;
-    }
+    if (eval >= beta) return beta;
+    if (eval > alpha) alpha = eval;
 
     Movelist moves;
-    movegen::legalmoves(moves, board);
+    movegen::legalmoves(moves, currentBoard);
     Movelist captures;
-
     for (Move move : moves) {
-	    if (board.isCapture(move)) {
-	    captures.add(move);
-	}
+        if (currentBoard.isCapture(move)) captures.add(move);
     }
-    orderMoves(captures);
+    orderMoves(captures, currentBoard);
 
     for (const Move move : captures) {
-        board.makeMove(move);
-        eval = -quiescenceSearch(-beta, -alpha);
-        board.unmakeMove(move);
+        Board newBoard;
+        newBoard.setFen(currentBoard.getFen());
+        newBoard.makeMove(move);
+
+        int qeval = -quiescenceSearch(-beta, -alpha, newBoard);
         numQNodes++;
 
-        if (eval >= beta) {
-            numCutoffs++;
-            return beta;
-        }
-        if (eval > alpha) {
-            alpha = eval;
-        }
+        if (qeval >= beta) return beta;
+        if (qeval > alpha) alpha = qeval;
     }
 
     return alpha;
 }
 
-void Search::orderMoves(Movelist moves) {
-    sort(moves.begin(), moves.end(), [this](const Move& a, const Move& b) {
-        bool aIsCapture = board.isCapture(a);
-        bool bIsCapture = board.isCapture(b);
+void Search::orderMoves(Movelist& moves, Board& currentBoard) {
+    stable_sort(moves.begin(), moves.end(), [this, &currentBoard](const Move& a, const Move& b) {
+        bool aIsCapture = currentBoard.isCapture(a);
+        bool bIsCapture = currentBoard.isCapture(b);
         
-        if (aIsCapture != bIsCapture) {
-            return aIsCapture > bIsCapture;
+        if (aIsCapture != bIsCapture) return aIsCapture > bIsCapture;
+        if (aIsCapture && bIsCapture) {
+            return capturedPieceValue(currentBoard, a) > capturedPieceValue(currentBoard, b);
         }
-        
         return false;
     });
 }
 
+int Search::capturedPieceValue(Board& board, Move move) {
+    PieceType captured = board.at(move.to()).type();
+
+    switch (captured) {
+        case (uint8_t) PieceType::underlying::PAWN:
+            return Evaluation::pawnValue;
+        case (uint8_t) PieceType::underlying::KNIGHT:
+            return Evaluation::knightValue;
+        case (uint8_t) PieceType::underlying::BISHOP:
+            return Evaluation::bishopValue;
+        case (uint8_t) PieceType::underlying::ROOK:
+            return Evaluation::rookValue;
+        case (uint8_t) PieceType::underlying::QUEEN:
+            return Evaluation::queenValue;
+    }
+    return 0;
+}
+
 bool Search::isMateScore(int score) {
     static constexpr int maxMateDepth = 1000;
-    return abs(score) > immediateMateScore - maxMateDepth;
+    return std::abs(score) > immediateMateScore - maxMateDepth;
 }
 
 int Search::numPlyToMateFromScore(int score) {
-    return immediateMateScore - abs(score);
+    return immediateMateScore - std::abs(score);
 }
 
 void Search::initDebugInfo() {
-    searchStartTime = chrono::steady_clock::now();
+    searchStartTime = std::chrono::steady_clock::now();
     numNodes = 0;
     numQNodes = 0;
     numCutoffs = 0;
@@ -242,23 +257,21 @@ void Search::initDebugInfo() {
 
 void Search::logDebugInfo() {
     announceMate();
-    auto searchDuration = chrono::duration_cast<chrono::milliseconds>(
-        chrono::steady_clock::now() - searchStartTime).count();
+    auto searchDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - searchStartTime).count();
         
     printf("Best move: %s Eval: %d Search time: %lld ms\n", 
         uci::moveToUci(bestMoveThisIteration).c_str(), bestEvalThisIteration, searchDuration);
     printf("Num nodes: %d num Qnodes: %d num cutoffs: %d num TThits %d\n",
         numNodes, numQNodes, numCutoffs, numTranspositions);
-    printf("Current TT size %zu\n", 
-        transpositionTable.entries.size());
 }
 
 void Search::announceMate() {
     if (isMateScore(bestEvalThisIteration)) {
         int numPlyToMate = numPlyToMateFromScore(bestEvalThisIteration);
-        int numMovesToMate = static_cast<int>(ceil(numPlyToMate / 2.0f));
+        int numMovesToMate = static_cast<int>(std::ceil(numPlyToMate / 2.0f));
         
-        string sideWithMate = (bestEvalThisIteration * (board.sideToMove() == Color::WHITE ? 1 : -1) < 0) 
+        std::string sideWithMate = (bestEvalThisIteration * (board.sideToMove() == Color::WHITE ? 1 : -1) < 0) 
             ? "Black" : "White";
 
         printf("%s can mate in %d move%s\n", 

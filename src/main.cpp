@@ -50,7 +50,7 @@ int main() {
     Board board;
     Engine engine(4, board);
 
-	char side;
+    char side;
 	std::cout << "Enter the colour you wish to play (w)hite/(b)lack: ";
 	std::cin >> side;
 
@@ -58,8 +58,8 @@ int main() {
 		std::cout << "White selected" << std::endl;
 	} else if (side == 'b') {
 		std::cout << "Black selected" << std::endl;
-        Move aiMove = engine.getMove(board);
-        board.makeMove(aiMove);
+	Move aiMove = engine.getMove(board);
+	board.makeMove(aiMove);
 	} else {
 		std::cout << "Invalid colour" << std::endl;
 		main();
