@@ -48,6 +48,7 @@ bool isLegal(Board board, Move move) {
 
 int main() {
     Board board;
+	board.setFen("rnbqkbnr/ppp1pppp/8/3p4/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 2");
     Engine engine(4, board);
 
     char side;
