@@ -1,128 +1,206 @@
 #include <iostream>
-#include <cstdio>
-#include <string>
-#include "chess.hpp"
-#include "engine.hpp"
+#include <sstream>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include "engine.hpp"  // Your internal engine header file
 
-std::string getMoveFromPython(const std::string& fen) {
-    // Use python3 explicitly and handle spaces in path
-    #ifdef _WIN32
-        std::string command = "python \"gui.py\" \"" + fen + "\"";
-    #else
-        std::string command = "python3 \"gui.py\" \"" + fen + "\"";
-    #endif
+std::atomic<bool> stop_search(false);
+int num_threads = 1;
+bool ponder = false;
+bool limitStrength = false;
+int elo = 2500;
+bool showWDL = false;
+
+void uci_loop() {
+    std::string command;
+    Board board;
+    Engine engine(4, board);
     
-    FILE* pipe = popen(command.c_str(), "r");
+    std::cout << "id name WardenBot" << std::endl;
+    std::cout << "id author Edward Baker" << std::endl;
+    std::cout << "option name Move Overhead type spin default 30 min 0 max 5000" << std::endl;
+    std::cout << "option name Threads type spin default 1 min 1 max 16" << std::endl;
+    std::cout << "option name Hash type spin default 64 min 1 max 1024" << std::endl;
+    std::cout << "option name Ponder type check default false" << std::endl;
+    std::cout << "option name UCI_LimitStrength type check default false" << std::endl;
+    std::cout << "option name UCI_Elo type spin default 2500 min 1350 max 2850" << std::endl;
+    std::cout << "option name UCI_ShowWDL type check default false" << std::endl;
+    std::cout << "option name SyzygyPath type string default " << std::endl;
+    std::cout << "uciok" << std::endl;
     
-    if (!pipe) {
-        std::cerr << "Failed to open Python process." << std::endl;
-        return "";
-    }
+    while (std::getline(std::cin, command)) {
+        std::istringstream iss(command);
+        std::string token;
+        iss >> token;
+        
+        if (token == "uci") {
+            std::cout << "id name WardenBot" << std::endl;
+            std::cout << "id author Edward Baker" << std::endl;
+            std::cout << "option name Move Overhead type spin default 30 min 0 max 5000" << std::endl;
+            std::cout << "option name Threads type spin default 1 min 1 max 16" << std::endl;
+            std::cout << "option name Hash type spin default 64 min 1 max 1024" << std::endl;
+            std::cout << "option name Ponder type check default false" << std::endl;
+            std::cout << "option name UCI_LimitStrength type check default false" << std::endl;
+            std::cout << "option name UCI_Elo type spin default 2500 min 1350 max 2850" << std::endl;
+            std::cout << "option name UCI_ShowWDL type check default false" << std::endl;
+            std::cout << "option name SyzygyPath type string default " << std::endl;
+            std::cout << "uciok" << std::endl;
+        } 
+        else if (token == "isready") {
+            std::cout << "readyok" << std::endl;
+        } 
+        else if (token == "setoption") {
+            std::string nameToken;
+            iss >> nameToken; // Skip "name"
+            
+            if (nameToken == "name") {
+                // Read the option name (might contain spaces)
+                std::string optionName;
+                iss >> optionName;
+                
+                // Read additional name parts until "value" is found
+                std::string part;
+                while (iss >> part && part != "value") {
+                    optionName += " " + part;
+                }
+                
+                // Read the value
+                std::string optionValue;
+                std::getline(iss, optionValue);
+                // Remove leading space if exists
+                if (!optionValue.empty() && optionValue[0] == ' ') {
+                    optionValue = optionValue.substr(1);
+                }
+                
+                // Handle different options
+                if (optionName == "Threads") {
+                    try {
+                        num_threads = std::stoi(optionValue);
+                        // You would update your engine's thread count here
+                    } catch (...) {
+                        num_threads = 1;
+                    }
+                }
+                else if (optionName == "Ponder") {
+                    ponder = (optionValue == "true");
+                }
+                else if (optionName == "UCI_LimitStrength") {
+                    limitStrength = (optionValue == "true");
+                    // Update engine strength limiting
+                }
+                else if (optionName == "UCI_Elo") {
+                    try {
+                        elo = std::stoi(optionValue);
+                        // Update engine's Elo cap
+                    } catch (...) {
+                        elo = 2500;
+                    }
+                }
+                else if (optionName == "UCI_ShowWDL") {
+                    showWDL = (optionValue == "true");
+                }
+            }
+        } 
+        else if (token == "ucinewgame") {
+            board = Board(); // Reset to initial position
+            Engine engine(4, board); // Reset engine with default settings
+        } 
+        else if (token == "position") {
+            std::string pos_type;
+            iss >> pos_type;
+            
+            if (pos_type == "startpos") {
+                Board board;
+                
+                std::string moves_str;
+                if (iss >> moves_str && moves_str == "moves") {
+                    std::string move;
+                    while (iss >> move) {
+                        board.makeMove(uci::uciToMove(board, move));
+                    }
+                }
+            }
+            else if (pos_type == "fen") {
+                std::string rest_of_line;
+                std::getline(iss, rest_of_line); // Read the rest of the input line
 
-    std::array<char, 128> buffer;
-    std::string result;
+                std::istringstream fen_stream(rest_of_line);
+                std::string fen;
+                std::string token;
+                std::string moves_marker;
 
-    // Read the move from Python
-    if (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-        result = buffer.data();
-        // Trim whitespace and newlines
-        while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
-            result.pop_back();
+                // Read everything until "moves" is found
+                while (fen_stream >> token) {
+                    if (token == "moves") {
+                        moves_marker = token;
+                        break;
+                    }
+                    if (!fen.empty()) fen += " "; // Add space between FEN parts
+                    fen += token;
+                }
+
+                std::cout << "Changing fen to " << fen << std::endl;
+                Movelist moves;
+                movegen::legalmoves(moves, board);
+                bool updated = false;
+
+                for (Move move : moves) {
+                    board.makeMove(move);
+                    Movelist moves2;
+                    movegen::legalmoves(moves2, board);
+                    for (Move move2 : moves2) {
+                        board.makeMove(move2);
+                        if (board.getFen() == fen) {
+                            updated = true;
+                            break;
+                        }
+                        board.unmakeMove(move2);
+                    }
+                    if (updated) break;
+                    board.unmakeMove(move);
+                }
+
+                if (!updated) {
+                    std::cout << "No valid route to position found" << std::endl;
+                    board.setFen(fen);
+                }
+
+                // Handle moves after "moves"
+                if (!moves_marker.empty()) {
+                    std::string move;
+                    while (fen_stream >> move) {
+                        board.makeMove(uci::uciToMove(board, move));
+                    }
+                }
+                engine.setPosition(board);
+                std::cout << "Board position successfully set to " << board.getFen() << std::endl;
+            }
+        }
+        else if (token == "go") {
+            stop_search = false;
+            
+            // Launch search in a separate thread
+            std::thread search_thread([&]() {
+                Move bestMove = engine.getMove(board);
+                if (!stop_search) {
+                    std::cout << "bestmove " << uci::moveToUci(bestMove) << std::endl;
+                }
+            });
+            search_thread.detach(); // Let it run independently
+        } 
+        else if (token == "stop") {
+            stop_search = true;
+            Move bestMove = engine.getMove(board);
+            std::cout << "bestmove " << uci::moveToUci(bestMove) << std::endl;
+        } 
+        else if (token == "quit") {
+            break;
         }
     }
-
-    pclose(pipe);
-    return result;
-}
-
-bool isLegal(Board board, Move move) {
-	Movelist moves;
-	movegen::legalmoves(moves, board);
-	for (const auto &currentMove : moves) {
-		if (uci::moveToUci(currentMove) == uci::moveToUci(move)) {
-			return true;
-		}
-	}
-	return false;
 }
 
 int main() {
-    Board board;
-	board.setFen("rnbqkbnr/ppp1pppp/8/3p4/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 2");
-    Engine engine(4, board);
-
-    char side;
-	std::cout << "Enter the colour you wish to play (w)hite/(b)lack: ";
-	std::cin >> side;
-
-	if (side == 'w') {
-		std::cout << "White selected" << std::endl;
-	} else if (side == 'b') {
-		std::cout << "Black selected" << std::endl;
-	Move aiMove = engine.getMove(board);
-	board.makeMove(aiMove);
-	} else {
-		std::cout << "Invalid colour" << std::endl;
-		main();
-		return 0;
-	}
-
-    while (true) {
-        std::string fen = board.getFen();
-        Move userMove = uci::uciToMove(board, getMoveFromPython(fen));
-
-        if (isLegal(board, userMove)) {
-            board.makeMove(userMove);
-        } else {
-            std::cerr << "Invalid move received!" << std::endl;
-            continue;
-        }
-
-        // Check if the game is over
-        auto gameResult = board.isGameOver();
-        if (gameResult.first != GameResultReason::NONE) {
-            break;
-        }
-
-        // Get AI move
-        Move aiMove = engine.getMove(board);
-        board.makeMove(aiMove);
-
-        // Check if the game is over after AI move
-        gameResult = board.isGameOver();
-        if (gameResult.first != GameResultReason::NONE) {
-            break;
-        }
-    }
-
-	 auto gameOverResult = board.isGameOver();
-
-	switch (gameOverResult.first) {
-	case GameResultReason::NONE:
-		std::cout << "The game is still ongoing." << std::endl;
-		break;
-	case GameResultReason::CHECKMATE:
-		if (board.sideToMove() == chess::Color::WHITE) {
-			std::cout << "Black wins by checkmate!" << std::endl;
-		} else {
-			std::cout << "White wins by checkmate!" << std::endl;
-		}
-		break;
-	case GameResultReason::STALEMATE:
-		std::cout << "The game is a stalemate (draw)." << std::endl;
-		break;
-	case GameResultReason::INSUFFICIENT_MATERIAL:
-		std::cout << "The game is a draw by insufficient material." << std::endl;
-		break;
-	case GameResultReason::FIFTY_MOVE_RULE:
-		std::cout << "The game is a draw by the fifty-move rule." << std::endl;
-		break;
-	case GameResultReason::THREEFOLD_REPETITION:
-		std::cout << "The game is a draw by threefold repetition." << std::endl;
-		break;
-	default:
-		std::cout << "The game has ended with an unknown result." << std::endl;
-	}
-
+    uci_loop();
     return 0;
 }

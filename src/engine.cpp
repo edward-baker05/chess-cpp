@@ -12,13 +12,17 @@ Engine::Engine(int maxDepth, Board board)
     search_.settings.depth = maxDepth; 
 }
 
-chess::Move Engine::getMove(Board& board) {
+void Engine::setPosition(Board board) {
+    board_ = board;
+}
+
+chess::Move Engine::getMove(Board board) {
     board_ = board;
     team_ = board_.sideToMove();
     cout << "Maximising score for " << team_ << endl;
 
     cout << "Starting search..." << endl;
-    search_.startSearch(board); 
+    search_.startSearch(board_); 
     auto [bestMove, bestEval] = search_.getSearchResult(); 
 
     cout << "Best move: " << chess::uci::moveToSan(board_, bestMove) 

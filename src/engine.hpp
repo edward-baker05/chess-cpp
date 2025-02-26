@@ -13,11 +13,9 @@ namespace chess {
 
 class Engine {
 public:
-    // Constructor
     Engine(int maxDepth, Board board);
-
-    // Get the best move for the current board position
-    Move getMove(Board& board);
+    void setPosition(Board board);
+    Move getMove(Board board);
 
 private:
     int maxDepth_; // Maximum search depth

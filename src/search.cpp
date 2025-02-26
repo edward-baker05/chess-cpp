@@ -1,6 +1,8 @@
 #include "search.hpp"
 #include "evaluation.hpp"
 #include "transposition.hpp"
+#include "json.hpp"
+#include <cpr/cpr.h>
 #include <cmath>
 #include <iostream>
 #include <fstream>
@@ -12,6 +14,7 @@
 #include <mutex>
 #include <condition_variable>
 
+using json = nlohmann::json;
 using namespace std;
 namespace chess {
 
@@ -43,30 +46,48 @@ void Search::startSearch(Board board) {
     abortSearch = false;
     searchDiagnostics = SearchDiagnostics();
 
-    if (settings.useIterativeDeepening) {
-        cout << "Using iterative deepening" << endl;
-        int targetDepth = settings.useFixedDepthSearch ? settings.depth : numeric_limits<int>::max();
-        auto start = chrono::steady_clock::now();
+    int targetDepth = settings.useFixedDepthSearch ? settings.depth : numeric_limits<int>::max();
+    auto start = chrono::steady_clock::now();
 
-        for (int searchDepth = 1; searchDepth <= targetDepth; searchDepth++) {
-            auto end = chrono::steady_clock::now();
-            int elapsed = chrono::duration<double, milli>(end - start).count();
-            cout << "Depth " << searchDepth - 1 << " complete in " << elapsed << endl;
+    for (int searchDepth = 1; searchDepth <= targetDepth; searchDepth++) {
+        auto end = chrono::steady_clock::now();
+        int elapsed = chrono::duration<double, milli>(end - start).count();
+        cout << "Depth " << searchDepth - 1 << " complete in " << elapsed << endl;
 
-            if (searchDepth >= 4 && elapsed > 2000) break;
+        if (searchDepth >= 6 && elapsed > 3500) break;
 
-            cout << "Searching depth " << searchDepth << endl;
-            parallelSearch(searchDepth);
+        cout << "Searching depth " << searchDepth << endl;
+        parallelSearch(searchDepth);
 
-            if (abortSearch) break;
-            currentIterativeSearchDepth = searchDepth;
-            bestMove = bestMoveThisIteration;
-            bestEval = bestEvalThisIteration;
-        }
-    } else {
-        parallelSearch(settings.depth);
+        if (abortSearch) break;
+        currentIterativeSearchDepth = searchDepth;
         bestMove = bestMoveThisIteration;
         bestEval = bestEvalThisIteration;
+    }
+
+    string url = "https://stockfish.online/api/s/v2.php";
+    cpr::Response response = cpr::Get(cpr::Url{url},
+                                      cpr::Parameters{{"fen", this->board.getFen()},
+                                                      {"depth", "8"}});
+
+    if (response.status_code != 200) {
+        cerr << "HTTP Request failed with status code: " << response.status_code << endl;
+        return;
+    }
+
+    try {
+        json json_response = json::parse(response.text);
+        if (json_response.contains("mate") && !json_response["mate"].is_null()) {
+            cout << "Stockfish found checkmate in " << json_response["mate"] << " moves in position " << board.getFen() << endl;
+            // bestMove = uci::uciToMove(this->board, json_response["bestmove"]);
+        } else if (json_response.contains("evaluation") && json_response["evaluation"].is_number()) {
+            cout << "Stockfish evaluation: " << json_response["evaluation"].get<float>() * 100 << " in position " << board.getFen() << endl;
+        } else {
+            cout << response.text << endl;
+            cout << "Invalid evaluation data received from Stockfish." << endl;
+        }
+    } catch (json::parse_error& e) {
+        cout << "JSON Parsing Error" << endl;
     }
 }
 
