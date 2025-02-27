@@ -3,6 +3,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <unistd.h>
 #include "engine.hpp"  // Your internal engine header file
 
 std::atomic<bool> stop_search(false);
@@ -32,6 +33,7 @@ void uci_loop() {
     while (std::getline(std::cin, command)) {
         std::istringstream iss(command);
         std::string token;
+        std::cout << "Command received: " << command << std::endl;
         iss >> token;
         
         if (token == "uci") {
@@ -103,15 +105,15 @@ void uci_loop() {
             }
         } 
         else if (token == "ucinewgame") {
-            board = Board(); // Reset to initial position
-            Engine engine(4, board); // Reset engine with default settings
+            board = Board();
+            Engine engine(4, board); 
         } 
         else if (token == "position") {
             std::string pos_type;
             iss >> pos_type;
             
             if (pos_type == "startpos") {
-                Board board;
+                board = Board();
                 
                 std::string moves_str;
                 if (iss >> moves_str && moves_str == "moves") {
@@ -120,23 +122,21 @@ void uci_loop() {
                         board.makeMove(uci::uciToMove(board, move));
                     }
                 }
-            }
-            else if (pos_type == "fen") {
+            } else if (pos_type == "fen") {
                 std::string rest_of_line;
-                std::getline(iss, rest_of_line); // Read the rest of the input line
+                std::getline(iss, rest_of_line);
 
                 std::istringstream fen_stream(rest_of_line);
                 std::string fen;
                 std::string token;
                 std::string moves_marker;
 
-                // Read everything until "moves" is found
                 while (fen_stream >> token) {
                     if (token == "moves") {
                         moves_marker = token;
                         break;
                     }
-                    if (!fen.empty()) fen += " "; // Add space between FEN parts
+                    if (!fen.empty()) fen += " "; 
                     fen += token;
                 }
 
@@ -166,16 +166,15 @@ void uci_loop() {
                     board.setFen(fen);
                 }
 
-                // Handle moves after "moves"
                 if (!moves_marker.empty()) {
                     std::string move;
                     while (fen_stream >> move) {
                         board.makeMove(uci::uciToMove(board, move));
                     }
                 }
-                engine.setPosition(board);
-                std::cout << "Board position successfully set to " << board.getFen() << std::endl;
             }
+            engine.setPosition(board);
+            std::cout << "Board position successfully set to " << board.getFen() << std::endl;
         }
         else if (token == "go") {
             stop_search = false;
@@ -187,7 +186,7 @@ void uci_loop() {
                     std::cout << "bestmove " << uci::moveToUci(bestMove) << std::endl;
                 }
             });
-            search_thread.detach(); // Let it run independently
+            search_thread.detach(); 
         } 
         else if (token == "stop") {
             stop_search = true;

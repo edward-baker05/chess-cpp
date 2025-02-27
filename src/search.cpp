@@ -81,7 +81,8 @@ void Search::startSearch(Board board) {
             cout << "Stockfish found checkmate in " << json_response["mate"] << " moves in position " << board.getFen() << endl;
             // bestMove = uci::uciToMove(this->board, json_response["bestmove"]);
         } else if (json_response.contains("evaluation") && json_response["evaluation"].is_number()) {
-            cout << "Stockfish evaluation: " << json_response["evaluation"].get<float>() * 100 << " in position " << board.getFen() << endl;
+            int stockfishEval = json_response["evaluation"].get<float>() * ((int) board.sideToMove() == 0) ? 100 : -100;
+            cout << "Stockfish evaluation: " << stockfishEval << " in position " << board.getFen() << endl;
         } else {
             cout << response.text << endl;
             cout << "Invalid evaluation data received from Stockfish." << endl;
