@@ -1,0 +1,4 @@
+chess.hpp
+network
+*.csv
+./venv/
