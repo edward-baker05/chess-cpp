@@ -169,7 +169,7 @@ void Search::parallelSearch(int depth) {
             const Move move = moves[i];
             threadBoard.makeMove(move);
 
-            int eval = -searchMoves(depth - 1, 1, negativeInfinity, -sharedAlpha, threadBoard);
+            int eval = -searchMoves(depth - 1, 1, bestEvalThisIteration - 50, bestEvalThisIteration + 50, threadBoard);
             threadBoard.unmakeMove(move);
 
             lock_guard<mutex> lock(mtx);
@@ -295,21 +295,21 @@ int Search::capturedPieceValue(Board& board, Move move) {
 
     switch (captured) {
         case (uint8_t) PieceType::underlying::PAWN:
-            return Evaluation::pawnValue;
+            return 100;
         case (uint8_t) PieceType::underlying::KNIGHT:
-            return Evaluation::knightValue;
+            return 300;
         case (uint8_t) PieceType::underlying::BISHOP:
-            return Evaluation::bishopValue;
+            return 320;
         case (uint8_t) PieceType::underlying::ROOK:
-            return Evaluation::rookValue;
+            return 500;
         case (uint8_t) PieceType::underlying::QUEEN:
-            return Evaluation::queenValue;
+            return 900;
     }
     return 0;
 }
 
 bool Search::isMateScore(int score) {
-    static constexpr int maxMateDepth = 1000;
+    static constexpr int maxMateDepth = 100;
     return std::abs(score) > immediateMateScore - maxMateDepth;
 }
 
