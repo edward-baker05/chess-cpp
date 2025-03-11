@@ -26,8 +26,6 @@ Search::Search(Board& board, AISettings settings)
     , numQNodes(0)
     , numCutoffs(0)
     , numTranspositions(0)
-    , bestEval(0)
-    , bestEvalThisIteration(0)
     , currentIterativeSearchDepth(0)
     , abortSearch(false)
     , evaluation(Evaluation())
@@ -40,7 +38,37 @@ void Search::startSearch(Board board) {
     currentRootFEN = board.getFen();
     transpositionTable.clear();
 
-    bestEvalThisIteration = bestEval = 0;
+    string url = "https://stockfish.online/api/s/v2.php";
+    cpr::Response response = cpr::Get(cpr::Url{url},
+                                      cpr::Parameters{{"fen", currentRootFEN},
+                                                      {"depth", "8"}});
+
+    if (response.status_code != 200) {
+        cerr << "HTTP Request failed with status code: " << response.status_code << endl;
+        return;
+    }
+
+    try {
+        json json_response = json::parse(response.text);
+
+        if (json_response.contains("evaluation") && json_response["evaluation"].is_number()) {
+            int stockfishEval = json_response["evaluation"].get<float>() * ((int) board.sideToMove() == 0 ? 100 : -100);
+        }
+
+        if (json_response.contains("mate") && !json_response["mate"].is_null()) {
+            cout << "Stockfish found checkmate in " << json_response["mate"] << " moves in position " << board.getFen() << endl;
+            // int moveToMate = json_response["mate"].get<int>();
+            // if (moveToMate > 0) {
+                //bestMove = uci::uciToMove(this->board, json_response["bestmove"]);
+                //return;
+            // }
+        }
+    } catch (json::parse_error& e) {
+        cout << "JSON Parsing Error" << endl;
+    }
+
+
+    bestEvalThisIteration = bestEval = negativeInfinity;
     bestMoveThisIteration = bestMove = Move::NO_MOVE;
     currentIterativeSearchDepth = 0;
     abortSearch = false;
@@ -52,11 +80,14 @@ void Search::startSearch(Board board) {
     for (int searchDepth = 1; searchDepth <= targetDepth; searchDepth++) {
         auto end = chrono::steady_clock::now();
         int elapsed = chrono::duration<double, milli>(end - start).count();
-        cout << "Depth " << searchDepth - 1 << " complete in " << elapsed << endl;
+        if (searchDepth > 1) {
+            cout << "Depth " << searchDepth - 1 << " complete in " << elapsed << ". Best evaluation is " << bestEval << endl;
+        }
 
         if (searchDepth >= 6 && elapsed > 3500) break;
 
         cout << "Searching depth " << searchDepth << endl;
+        // searchMoves(searchDepth, 0, negativeInfinity, positiveInfinity, board);
         parallelSearch(searchDepth);
 
         if (abortSearch) break;
@@ -65,10 +96,12 @@ void Search::startSearch(Board board) {
         bestEval = bestEvalThisIteration;
     }
 
-    string url = "https://stockfish.online/api/s/v2.php";
-    cpr::Response response = cpr::Get(cpr::Url{url},
-                                      cpr::Parameters{{"fen", this->board.getFen()},
-                                                      {"depth", "8"}});
+    logDebugInfo();
+    // this->board.makeMove(bestMove);
+
+    response = cpr::Get(cpr::Url{url},
+                        cpr::Parameters{{"fen", this->board.getFen()},
+                        {"depth", "8"}});
 
     if (response.status_code != 200) {
         cerr << "HTTP Request failed with status code: " << response.status_code << endl;
@@ -77,11 +110,9 @@ void Search::startSearch(Board board) {
 
     try {
         json json_response = json::parse(response.text);
-        if (json_response.contains("mate") && !json_response["mate"].is_null()) {
-            cout << "Stockfish found checkmate in " << json_response["mate"] << " moves in position " << board.getFen() << endl;
-            // bestMove = uci::uciToMove(this->board, json_response["bestmove"]);
-        } else if (json_response.contains("evaluation") && json_response["evaluation"].is_number()) {
-            int stockfishEval = json_response["evaluation"].get<float>() * ((int) board.sideToMove() == 0) ? 100 : -100;
+
+        if (json_response.contains("evaluation") && json_response["evaluation"].is_number()) {
+            int stockfishEval = json_response["evaluation"].get<float>() * ((int) board.sideToMove() == 0 ? 100 : -100);
             cout << "Stockfish evaluation: " << stockfishEval << " in position " << board.getFen() << endl;
         } else {
             cout << response.text << endl;
@@ -138,7 +169,7 @@ void Search::parallelSearch(int depth) {
             const Move move = moves[i];
             threadBoard.makeMove(move);
 
-            int eval = -searchMoves(depth - 1, 1, -positiveInfinity, -sharedAlpha, threadBoard);
+            int eval = -searchMoves(depth - 1, 1, negativeInfinity, -sharedAlpha, threadBoard);
             threadBoard.unmakeMove(move);
 
             lock_guard<mutex> lock(mtx);
@@ -167,8 +198,8 @@ int Search::searchMoves(int depth, int plyFromRoot, int alpha, int beta, Board& 
     movegen::legalmoves(moves, currentBoard);
     orderMoves(moves, currentBoard);
 
-    if (moves.empty()) {
-        return currentBoard.inCheck() ? -immediateMateScore + plyFromRoot : 0;
+    if (moves.empty() || board.isRepetition(1)) {
+        return currentBoard.inCheck() ? -immediateMateScore + plyFromRoot : -100;
     }
 
     int nodeType = TranspositionTable::upperBound;
@@ -192,6 +223,11 @@ int Search::searchMoves(int depth, int plyFromRoot, int alpha, int beta, Board& 
             alpha = eval;
             nodeType = TranspositionTable::exact;
             bestMove = move;
+
+            if (plyFromRoot == 0) {
+                bestMoveThisIteration = move;
+                bestEvalThisIteration = eval;
+            }
         }
     }
 
@@ -200,33 +236,45 @@ int Search::searchMoves(int depth, int plyFromRoot, int alpha, int beta, Board& 
 }
 
 int Search::quiescenceSearch(int alpha, int beta, Board& currentBoard) {
-    int eval = evaluation.evaluate(currentBoard);
+    int standPat = evaluation.evaluate(currentBoard);
+    int bestEval = standPat;
+    int delta = 900;
     searchDiagnostics.numPositionsEvaluated++;
 
-    if (eval >= beta) return beta;
-    if (eval > alpha) alpha = eval;
+    if (standPat >= beta) return standPat;
+    if (standPat < alpha - delta) return alpha;
+    if (standPat > alpha) alpha = standPat;
 
     Movelist moves;
     movegen::legalmoves(moves, currentBoard);
     Movelist captures;
     for (Move move : moves) {
-        if (currentBoard.isCapture(move)) captures.add(move);
+        if (currentBoard.isCapture(move)) {
+            captures.add(move);
+            continue;
+        }
+        currentBoard.makeMove(move);
+        if (currentBoard.inCheck()) captures.add(move);
+        currentBoard.unmakeMove(move);
     }
+
     orderMoves(captures, currentBoard);
 
+    Board newBoard;
     for (const Move move : captures) {
-        Board newBoard;
         newBoard.setFen(currentBoard.getFen());
         newBoard.makeMove(move);
 
         int qeval = -quiescenceSearch(-beta, -alpha, newBoard);
+        newBoard.unmakeMove(move);
         numQNodes++;
 
-        if (qeval >= beta) return beta;
+        if (qeval >= beta) return qeval;
+        if (qeval > bestEval) bestEval = qeval;
         if (qeval > alpha) alpha = qeval;
     }
 
-    return alpha;
+    return bestEval;
 }
 
 void Search::orderMoves(Movelist& moves, Board& currentBoard) {

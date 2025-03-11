@@ -55,7 +55,7 @@ public:
 private:
     static constexpr int transpositionTableSize = 64000;
     static constexpr int immediateMateScore = 100000;
-    static constexpr int positiveInfinity = 9999999;
+    static constexpr int positiveInfinity = 9999;
     static constexpr int negativeInfinity = -positiveInfinity;
     std::string currentRootFEN;
 

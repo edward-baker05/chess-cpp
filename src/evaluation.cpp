@@ -6,6 +6,7 @@ namespace chess {
 
 int Evaluation::evaluate(Board board) {
     this->board = board;
+
     int whiteEval = 0;
     int blackEval = 0;
 
@@ -19,15 +20,14 @@ int Evaluation::evaluate(Board board) {
 
     whiteEval += whiteMaterial;
     blackEval += blackMaterial;
-   	whiteEval += mopUpEval(WHITE, BLACK, whiteMaterial, blackMaterial, blackEndgamePhaseWeight);
+    whiteEval += mopUpEval(WHITE, BLACK, whiteMaterial, blackMaterial, blackEndgamePhaseWeight);
     blackEval += mopUpEval(BLACK, WHITE, blackMaterial, whiteMaterial, whiteEndgamePhaseWeight);
 
     whiteEval += evaluatePieceSquareTables(WHITE, blackEndgamePhaseWeight);
     blackEval += evaluatePieceSquareTables(BLACK, whiteEndgamePhaseWeight);
 
-    int eval = whiteEval - blackEval;
-	
     int perspective = static_cast<int>(board.sideToMove().internal()) == WHITE ? 1 : -1;
+    int eval = whiteEval - blackEval;
     return eval * perspective;
 }
 
