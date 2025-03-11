@@ -169,7 +169,7 @@ void Search::parallelSearch(int depth) {
             const Move move = moves[i];
             threadBoard.makeMove(move);
 
-            int eval = -searchMoves(depth - 1, 1, bestEvalThisIteration - 50, bestEvalThisIteration + 50, threadBoard);
+            int eval = -searchMoves(depth - 1, 1, -positiveInfinity, -sharedAlpha, threadBoard);
             threadBoard.unmakeMove(move);
 
             lock_guard<mutex> lock(mtx);
