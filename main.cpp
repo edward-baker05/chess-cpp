@@ -4,7 +4,7 @@
 #include <vector>
 #include <atomic>
 #include <unistd.h>
-#include "engine.hpp"  // Your internal engine header file
+#include "engine.hpp"
 
 std::atomic<bool> stop_search(false);
 int num_threads = 1;
